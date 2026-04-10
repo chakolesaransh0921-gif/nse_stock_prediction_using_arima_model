@@ -5,10 +5,21 @@ import matplotlib.pyplot as plt
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.arima.model import ARIMA
 
-# Title
-st.title("Stock Price Prediction using ARIMA")
+# -----------------------------
+# Page Config
+# -----------------------------
 
+st.set_page_config(
+    page_title="NSE Stock Prediction Dashboard",
+    layout="wide"
+)
+
+st.title("📈 NSE Stock Prediction Using ARIMA Model")
+
+# -----------------------------
 # Load Data
+# -----------------------------
+
 @st.cache_data
 def load_data():
     df = pd.read_csv("nsestockindia.csv")
@@ -18,61 +29,108 @@ def load_data():
 
 df = load_data()
 
-# Show available stocks
+# -----------------------------
+# Sidebar Controls
+# -----------------------------
+
+st.sidebar.header("⚙️ Settings")
+
 stocks = df["stock"].unique()
 
-# Dropdown for stock selection
-selected_stock = st.selectbox(
-    "Select Stock Name",
+selected_stock = st.sidebar.selectbox(
+    "Select Stock",
     stocks
 )
 
-# Filter selected stock
+forecast_steps = st.sidebar.slider(
+    "Forecast Days",
+    1,
+    30,
+    10
+)
+
+# Filter Data
 st_data = df[df["stock"] == selected_stock]
 
-# Show data
-st.subheader("Stock Data Preview")
-st.write(st_data.tail())
+# -----------------------------
+# Top Metrics Row
+# -----------------------------
 
-# Stationarity Check Function
-def check_stationarity(timeseries):
-    result = adfuller(timeseries.dropna())
+latest_price = st_data["Close"].iloc[-1]
+mean_price = st_data["Close"].mean()
+max_price = st_data["Close"].max()
+min_price = st_data["Close"].min()
 
-    st.write("ADF Statistic:", result[0])
-    st.write("P-value:", result[1])
+col1, col2, col3, col4 = st.columns(4)
 
-    if result[1] < 0.05:
-        st.success("Data is Stationary")
-    else:
-        st.warning("Data is NOT Stationary")
+col1.metric("📌 Latest Price", f"{latest_price:.2f}")
+col2.metric("📊 Average Price", f"{mean_price:.2f}")
+col3.metric("🔼 Max Price", f"{max_price:.2f}")
+col4.metric("🔽 Min Price", f"{min_price:.2f}")
 
-# Prepare Close Data
+# -----------------------------
+# Data Preview Section
+# -----------------------------
+
+st.subheader("📄 Stock Data Preview")
+
+st.dataframe(st_data.tail(10))
+
+# -----------------------------
+# Prepare Data
+# -----------------------------
+
 data = st_data[["Close"]].copy()
 
 data["Returns"] = data["Close"].pct_change()
 data.dropna(inplace=True)
 
-# Differencing
 data["Close_Diff"] = data["Close"].diff()
 
-# Stationarity Check
-st.subheader("Stationarity Test")
+# -----------------------------
+# Stationarity Test
+# -----------------------------
+
+st.subheader("📉 Stationarity Test (ADF Test)")
+
+def check_stationarity(timeseries):
+    result = adfuller(timeseries.dropna())
+
+    col1, col2 = st.columns(2)
+
+    col1.metric("ADF Statistic", round(result[0], 4))
+    col2.metric("P-value", round(result[1], 6))
+
+    if result[1] < 0.05:
+        st.success("✅ Data is Stationary")
+    else:
+        st.warning("⚠️ Data is NOT Stationary")
 
 check_stationarity(data["Close"])
 
+# -----------------------------
+# Price Trend Graph
+# -----------------------------
+
+st.subheader("📊 Historical Price Trend")
+
+fig1, ax1 = plt.subplots(figsize=(10,5))
+
+ax1.plot(data["Close"])
+ax1.set_title("Historical Closing Prices")
+ax1.set_xlabel("Date")
+ax1.set_ylabel("Price")
+
+st.pyplot(fig1)
+
+# -----------------------------
 # ARIMA Model
-st.subheader("Model Training")
+# -----------------------------
+
+st.subheader("🤖 ARIMA Model Training")
 
 model = ARIMA(data["Close"], order=(5,1,0))
 model_fit = model.fit()
-
-# Forecast
-forecast_steps = st.slider(
-    "Select Forecast Days",
-    1,
-    30,
-    10
-)
 
 forecast = model_fit.forecast(steps=forecast_steps)
 
@@ -83,17 +141,92 @@ dates = pd.date_range(
     freq="B"
 )[1:]
 
-# Plot
-st.subheader("Stock Price Prediction")
+# -----------------------------
+# Forecast Data Table
+# -----------------------------
 
-fig, ax = plt.subplots(figsize=(10,5))
+forecast_df = pd.DataFrame({
+    "Date": dates,
+    "Predicted Price": forecast
+})
 
-ax.plot(data["Close"], label="Actual Prices")
-ax.plot(dates, forecast,
-        label="Predicted Prices",
-        linestyle="dashed")
+forecast_df.set_index("Date", inplace=True)
 
-plt.xticks(rotation=90)
+st.subheader("📅 Forecast Table")
+
+st.dataframe(forecast_df)
+
+# Download Button
+csv = forecast_df.to_csv().encode('utf-8')
+
+st.download_button(
+    "⬇️ Download Forecast CSV",
+    csv,
+    "forecast.csv",
+    "text/csv"
+)
+
+# -----------------------------
+# Forecast Graph
+# -----------------------------
+
+st.subheader("📈 Stock Price Prediction")
+
+fig2, ax2 = plt.subplots(figsize=(12,6))
+
+ax2.plot(data["Close"], label="Actual Prices")
+
+ax2.plot(
+    dates,
+    forecast,
+    label="Predicted Prices",
+    linestyle="dashed"
+)
+
+ax2.set_title("Actual vs Predicted Prices")
+ax2.set_xlabel("Date")
+ax2.set_ylabel("Price")
+
+plt.xticks(rotation=45)
+
 plt.legend()
 
-st.pyplot(fig)
+st.pyplot(fig2)
+
+# -----------------------------
+# Returns Visualization
+# -----------------------------
+
+st.subheader("📉 Daily Returns Analysis")
+
+fig3, ax3 = plt.subplots(figsize=(10,5))
+
+ax3.plot(data["Returns"])
+ax3.set_title("Daily Returns")
+
+st.pyplot(fig3)
+
+# -----------------------------
+# Summary Statistics
+# -----------------------------
+
+st.subheader("📊 Summary Statistics")
+
+stats = data["Close"].describe()
+
+st.write(stats)
+
+# -----------------------------
+# Footer
+# -----------------------------
+
+st.markdown("---")
+
+st.markdown(
+    """
+    **Project:** NSE Stock Prediction Using ARIMA  
+    **Model Used:** ARIMA (AutoRegressive Integrated Moving Average)  
+    **Visualization:** Matplotlib  
+    **Interface:** Streamlit
+    """
+)
