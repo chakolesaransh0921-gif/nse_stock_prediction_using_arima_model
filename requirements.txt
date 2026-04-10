@@ -1,4 +1,6 @@
+streamlit 
 pandas 
-matplotlib
-statsmodels
-streamlit
+numpy 
+plotly 
+statsmodels 
+streamlit-extra
