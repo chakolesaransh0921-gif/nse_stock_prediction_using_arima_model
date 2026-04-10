@@ -8,6 +8,8 @@ import plotly.graph_objects as go
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.arima.model import ARIMA
 
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
 from streamlit_extras.metric_cards import style_metric_cards
 
 # -----------------------------
@@ -35,7 +37,7 @@ def load_data():
 df = load_data()
 
 # -----------------------------
-# Sidebar
+# Sidebar Controls
 # -----------------------------
 
 st.sidebar.header("⚙️ Settings")
@@ -54,8 +56,8 @@ forecast_steps = st.sidebar.slider(
     10
 )
 
-# Filter stock
-st_data = df[df["stock"] == selected_stock]
+# Filter stock safely
+st_data = df[df["stock"] == selected_stock].copy()
 
 # -----------------------------
 # Moving Averages
@@ -81,158 +83,228 @@ col3.metric("📉 Volatility", f"{volatility:.2f}")
 style_metric_cards()
 
 # -----------------------------
-# Interactive Price Chart
+# Tabs Layout
 # -----------------------------
 
-st.subheader("📊 Interactive Price Chart")
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 Price Charts",
+    "📉 Stationarity",
+    "🤖 Forecast",
+    "📊 Statistics"
+])
 
-fig = go.Figure()
+# =============================
+# TAB 1 — PRICE CHARTS
+# =============================
 
-fig.add_trace(
-    go.Scatter(
+with tab1:
+
+    st.subheader("📊 Price with Moving Averages")
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(
         x=st_data.index,
         y=st_data["Close"],
         name="Close Price"
-    )
-)
+    ))
 
-fig.add_trace(
-    go.Scatter(
+    fig.add_trace(go.Scatter(
         x=st_data.index,
         y=st_data["MA20"],
         name="MA20"
-    )
-)
+    ))
 
-fig.add_trace(
-    go.Scatter(
+    fig.add_trace(go.Scatter(
         x=st_data.index,
         y=st_data["MA50"],
         name="MA50"
+    ))
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Candlestick Chart (if OHLC exists)
+
+    if {"Open","High","Low","Close"}.issubset(st_data.columns):
+
+        st.subheader("🕯️ Candlestick Chart")
+
+        candle = go.Figure(data=[go.Candlestick(
+            x=st_data.index,
+            open=st_data["Open"],
+            high=st_data["High"],
+            low=st_data["Low"],
+            close=st_data["Close"]
+        )])
+
+        st.plotly_chart(candle, use_container_width=True)
+
+# =============================
+# TAB 2 — STATIONARITY
+# =============================
+
+with tab2:
+
+    st.subheader("📉 Stationarity Test")
+
+    data = st_data[["Close"]].copy()
+
+    data["Returns"] = data["Close"].pct_change()
+
+    def check_stationarity(timeseries):
+
+        result = adfuller(timeseries.dropna())
+
+        col1, col2 = st.columns(2)
+
+        col1.metric(
+            "ADF Statistic",
+            round(result[0], 4)
+        )
+
+        col2.metric(
+            "P-value",
+            round(result[1], 6)
+        )
+
+        if result[1] < 0.05:
+            st.success("✅ Data is Stationary")
+        else:
+            st.warning("⚠️ Data is NOT Stationary")
+
+    check_stationarity(data["Close"])
+
+    # Returns Chart
+
+    st.subheader("📉 Daily Returns")
+
+    fig_returns = px.line(
+        data,
+        y="Returns",
+        title="Daily Returns Trend"
     )
-)
 
-st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig_returns,
+                    use_container_width=True)
 
-# -----------------------------
-# Returns Calculation
-# -----------------------------
+# =============================
+# TAB 3 — FORECAST
+# =============================
 
-data = st_data[["Close"]].copy()
+with tab3:
 
-data["Returns"] = data["Close"].pct_change()
+    st.subheader("🤖 ARIMA Forecast")
 
-# -----------------------------
-# Returns Chart
-# -----------------------------
+    model = ARIMA(
+        data["Close"].dropna(),
+        order=(5,1,0)
+    )
 
-st.subheader("📉 Daily Returns")
+    model_fit = model.fit()
 
-fig_returns = px.line(
-    data,
-    y="Returns",
-    title="Daily Returns Trend"
-)
+    forecast = model_fit.forecast(
+        steps=forecast_steps
+    )
 
-st.plotly_chart(fig_returns, use_container_width=True)
+    # Future Dates
 
-# -----------------------------
-# Stationarity Test
-# -----------------------------
+    dates = pd.date_range(
+        start=data.index[-1],
+        periods=forecast_steps + 1,
+        freq="B"
+    )[1:]
 
-st.subheader("📉 Stationarity Test")
+    forecast_df = pd.DataFrame({
+        "Date": dates,
+        "Predicted Price": forecast
+    })
 
-def check_stationarity(timeseries):
+    forecast_df.set_index(
+        "Date",
+        inplace=True
+    )
 
-    result = adfuller(timeseries.dropna())
+    # Forecast Plot
+
+    fig_forecast = go.Figure()
+
+    fig_forecast.add_trace(
+        go.Scatter(
+            x=data.index,
+            y=data["Close"],
+            name="Actual"
+        )
+    )
+
+    fig_forecast.add_trace(
+        go.Scatter(
+            x=forecast_df.index,
+            y=forecast_df["Predicted Price"],
+            name="Prediction"
+        )
+    )
+
+    st.plotly_chart(
+        fig_forecast,
+        use_container_width=True
+    )
+
+    # Accuracy Metrics
+
+    train = data["Close"][:-forecast_steps]
+    test = data["Close"][-forecast_steps:]
+
+    model2 = ARIMA(train, order=(5,1,0))
+    model2_fit = model2.fit()
+
+    pred = model2_fit.forecast(
+        steps=len(test)
+    )
+
+    rmse = np.sqrt(
+        mean_squared_error(test, pred)
+    )
+
+    mae = mean_absolute_error(
+        test,
+        pred
+    )
 
     col1, col2 = st.columns(2)
 
-    col1.metric("ADF Statistic", round(result[0], 4))
-    col2.metric("P-value", round(result[1], 6))
+    col1.metric("RMSE", round(rmse,2))
+    col2.metric("MAE", round(mae,2))
 
-    if result[1] < 0.05:
-        st.success("✅ Data is Stationary")
-    else:
-        st.warning("⚠️ Data is NOT Stationary")
+    # Forecast Table
 
-check_stationarity(data["Close"])
+    st.subheader("📅 Forecast Table")
 
-# -----------------------------
-# ARIMA Model
-# -----------------------------
+    st.dataframe(forecast_df)
 
-st.subheader("🤖 ARIMA Forecast")
+    # Download
 
-model = ARIMA(data["Close"].dropna(), order=(5,1,0))
+    csv = forecast_df.to_csv().encode('utf-8')
 
-model_fit = model.fit()
-
-forecast = model_fit.forecast(steps=forecast_steps)
-
-# Future dates
-dates = pd.date_range(
-    start=data.index[-1],
-    periods=forecast_steps + 1,
-    freq="B"
-)[1:]
-
-forecast_df = pd.DataFrame({
-    "Date": dates,
-    "Predicted Price": forecast
-})
-
-forecast_df.set_index("Date", inplace=True)
-
-# -----------------------------
-# Forecast Chart
-# -----------------------------
-
-fig_forecast = go.Figure()
-
-fig_forecast.add_trace(
-    go.Scatter(
-        x=data.index,
-        y=data["Close"],
-        name="Actual"
+    st.download_button(
+        "⬇️ Download Forecast CSV",
+        csv,
+        "forecast.csv",
+        "text/csv"
     )
-)
 
-fig_forecast.add_trace(
-    go.Scatter(
-        x=forecast_df.index,
-        y=forecast_df["Predicted Price"],
-        name="Prediction"
-    )
-)
+# =============================
+# TAB 4 — STATISTICS
+# =============================
 
-st.plotly_chart(fig_forecast, use_container_width=True)
+with tab4:
 
-# -----------------------------
-# Forecast Table
-# -----------------------------
+    st.subheader("📊 Summary Statistics")
 
-st.subheader("📅 Forecast Table")
+    st.write(data.describe())
 
-st.dataframe(forecast_df)
+    st.subheader("📄 Raw Data")
 
-# Download button
-csv = forecast_df.to_csv().encode('utf-8')
-
-st.download_button(
-    "⬇️ Download Forecast CSV",
-    csv,
-    "forecast.csv",
-    "text/csv"
-)
-
-# -----------------------------
-# Summary Stats
-# -----------------------------
-
-st.subheader("📊 Summary Statistics")
-
-st.write(data.describe())
+    st.dataframe(st_data.tail(20))
 
 # -----------------------------
 # Footer
@@ -243,7 +315,11 @@ st.markdown("---")
 st.markdown(
 """
 **Project:** NSE Stock Prediction Using ARIMA  
+**Model:** ARIMA (5,1,0)  
+**Visualization:** Plotly  
+**Interface:** Streamlit  
+
 **Libraries Used:**  
-Streamlit, Pandas, NumPy, Plotly, Statsmodels, Streamlit-Extras  
+Streamlit, Pandas, NumPy, Plotly, Statsmodels, Scikit-learn, Streamlit-Extras
 """
 )
